@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Deploy with Manual Approval
 
 on:
   push:
@@ -6,48 +6,52 @@ on:
       - main
 
 jobs:
-  build:
+  deploy-preview:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4  # Updated to v4
+        uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install Vercel CLI
+        run: npm install -g vercel
 
-      - name: Build project
-        run: npm run build
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4  # Updated to v4
-        with:
-          name: build-artifacts
-          path: build/
-
-      - name: Create deployment approval link
+      - name: Deploy to Preview
+        id: deploy
         run: |
-          echo "Manual deployment required!"
-          echo "Approvers: Please visit https://github.com/$GITHUB_REPOSITORY/actions/workflows/${{ github.workflow }}.yml and trigger the 'deploy' job manually after reviewing changes."
+          # Deploy to Vercel preview and capture deployment ID
+          DEPLOY_OUTPUT=$(vercel deploy --prebuilt --yes --token $VERCEL_TOKEN --json)
+          echo "$DEPLOY_OUTPUT" > deployment.json
+          DEPLOYMENT_ID=$(jq -r '.deploymentId' deployment.json)
+          DEPLOYMENT_URL=$(jq -r '.url' deployment.json)
+          
+          # Save outputs for the next job
+          echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> $GITHUB_ENV
+          echo "deployment_id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+          echo "Preview URL: $DEPLOYMENT_URL"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_1}}
+    
+    # Expose the deployment ID as a job output
+    outputs:
+      deployment_id: ${{ steps.deploy.outputs.deployment_id }}
 
-  deploy:
+  approve-and-promote:
+    needs: deploy-preview
     runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'workflow_dispatch'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4  # Updated to v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4  # Updated to v4
+      - name: Manual Approval
+        uses: trstringer/manual-approval@v1
         with:
-          name: build-artifacts
-          path: build/
+          secret: ${{ github.token }}
+          approvers: "your-github-username" # Replace with actual usernames
 
-      - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25.2.0
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN_1}}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          working-directory: build/
-          vercel-args: --prod
+      - name: Promote to Production
+        run: |
+          # Use the Vercel API to promote the deployment
+          curl -X POST \
+            "https://api.vercel.com/v13/deployments/${{ needs.deploy-preview.outputs.deployment_id }}/promote" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"target": "production"}'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_1}}
