@@ -18,16 +18,16 @@ jobs:
       - name: Deploy to Preview
         id: deploy
         run: |
-          # Deploy to Vercel preview and capture deployment ID
-          DEPLOY_OUTPUT=$(vercel --json deploy --prebuilt --yes --token $VERCEL_TOKEN)
-          echo "$DEPLOY_OUTPUT" > deployment.json
-          DEPLOYMENT_ID=$(jq -r '.deploymentId' deployment.json)
-          DEPLOYMENT_URL=$(jq -r '.url' deployment.json)
+          # Deploy to Vercel preview and get the URL
+          DEPLOYMENT_URL=$(vercel deploy --prebuilt --yes --token $VERCEL_TOKEN)
+          echo "Preview URL: $DEPLOYMENT_URL"
+          
+          # Extract deployment ID from the URL (example: abcdef.vercel.app → abcdef)
+          DEPLOYMENT_ID=$(echo "$DEPLOYMENT_URL" | cut -d '.' -f1)
           
           # Save outputs for the next job
           echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> $GITHUB_ENV
           echo "deployment_id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
-          echo "Preview URL: $DEPLOYMENT_URL"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_1}}
     
