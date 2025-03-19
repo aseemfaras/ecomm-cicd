@@ -13,7 +13,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Vercel CLI
-        run: npm install -g vercel
+        run: npm install -g vercel@latest  # Explicitly install the latest version
 
       - name: Deploy to Preview
         id: deploy
