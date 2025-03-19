@@ -19,7 +19,7 @@ jobs:
         id: deploy
         run: |
           # Deploy to Vercel preview and capture deployment ID
-          DEPLOY_OUTPUT=$(vercel deploy --prebuilt --yes --token $VERCEL_TOKEN --json)
+          DEPLOY_OUTPUT=$(vercel --json deploy --prebuilt --yes --token $VERCEL_TOKEN)
           echo "$DEPLOY_OUTPUT" > deployment.json
           DEPLOYMENT_ID=$(jq -r '.deploymentId' deployment.json)
           DEPLOYMENT_URL=$(jq -r '.url' deployment.json)
