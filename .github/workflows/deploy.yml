@@ -41,7 +41,7 @@ jobs:
         with:
           source_branch: "dev"
           destination_branch: "main"
-          github_token: ${{ secrets.GITHUB_TOKEN }}  # Use default token
+          github_token: ${{ secrets.PAT_TOKEN }}  # Use default token
           pr_title: "Production Release: $(date +'%Y-%m-%d')"
           pr_body: "Automated production release from dev branch"
 
@@ -49,7 +49,7 @@ jobs:
         id: check-pr
         uses: actions/github-script@v6
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           script: |
             const { data: pr } = await github.rest.pulls.get({
@@ -64,7 +64,7 @@ jobs:
         if: steps.check-pr.outputs.pr_state == 'open' && steps.check-pr.outputs.merged != 'true'
         uses: trstringer/manual-approval@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
           approvers: aseemfaras
           issue-number: ${{ steps.create-pr.outputs.pr-number }}
           minimum-approvals: 1
@@ -76,7 +76,7 @@ jobs:
         if: success() || steps.check-pr.outputs.merged == 'true'
         uses: actions/github-script@v6
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           script: |
             try {
