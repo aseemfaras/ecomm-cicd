@@ -50,7 +50,7 @@ jobs:
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ secrets.PAT_TOKEN }}
-          approvers: "aseemfaras"
+          approvers: aseemfaras
           issue-number: ${{ steps.create-pr.outputs.pr-number }}
           minimum-approvals: 1
 
