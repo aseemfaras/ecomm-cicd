@@ -72,3 +72,4 @@ jobs:
             } catch (error) {
               core.setFailed(`Merge failed: ${error.message}`);
             }
+              
