@@ -16,21 +16,16 @@ jobs:
         run: npm install -g vercel@latest
 
       - name: Build Project
-        run: vercel build --yes --token $VERCEL_TOKEN_1  # Generate .vercel/output
+        run: vercel build --yes --token $VERCEL_TOKEN_1
         env:
           VERCEL_TOKEN_1: ${{ secrets.VERCEL_TOKEN_1 }}
 
       - name: Deploy to Preview
         id: deploy
         run: |
-          # Deploy using prebuilt output
           DEPLOYMENT_URL=$(vercel deploy --prebuilt --yes --token $VERCEL_TOKEN_1)
           echo "Preview URL: $DEPLOYMENT_URL"
-          
-          # Extract deployment ID from URL
           DEPLOYMENT_ID=$(echo "$DEPLOYMENT_URL" | cut -d '.' -f1)
-          
-          # Save outputs
           echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> $GITHUB_ENV
           echo "deployment_id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
         env:
@@ -42,12 +37,15 @@ jobs:
   approve-and-promote:
     needs: deploy-preview
     runs-on: ubuntu-latest
+    permissions:  
+      issues: write
+      checks: write
     steps:
       - name: Manual Approval
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.token }}
-          approvers: "aseemfaras"  # Replace with actual username(s)
+          approvers: "aseemfaras"
 
       - name: Promote to Production
         run: |
@@ -57,4 +55,4 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"target": "production"}'
         env:
-          VERCEL_TOKEN_1: ${{ secrets.VERCEL_TOKEN_1 }}  # Fixed token reference
+          VERCEL_TOKEN_1: ${{ secrets.VERCEL_TOKEN_1 }}
