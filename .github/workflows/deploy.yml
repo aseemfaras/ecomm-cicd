@@ -3,56 +3,55 @@ name: Deploy with Manual Approval
 on:
   push:
     branches:
-      - main
+      - dev
 
 jobs:
-  deploy-preview:
+  build-and-verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Vercel CLI
-        run: npm install -g vercel@latest
+      - name: Install dependencies
+        run: npm install
 
-      - name: Build Project
-        run: vercel build --yes --token $VERCEL_TOKEN_1
-        env:
-          VERCEL_TOKEN_1: ${{ secrets.VERCEL_TOKEN_1 }}
+      - name: Build project
+        run: npm run build
 
-      - name: Deploy to Preview
-        id: deploy
-        run: |
-          DEPLOYMENT_URL=$(vercel deploy --prebuilt --yes --token $VERCEL_TOKEN_1)
-          echo "Preview URL: $DEPLOYMENT_URL"
-          DEPLOYMENT_ID=$(echo "$DEPLOYMENT_URL" | cut -d '.' -f1)
-          echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> $GITHUB_ENV
-          echo "deployment_id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
-        env:
-          VERCEL_TOKEN_1: ${{ secrets.VERCEL_TOKEN_1 }}
+      - name: Run tests
+        run: npm test
 
-    outputs:
-      deployment_id: ${{ steps.deploy.outputs.deployment_id }}
-
-  approve-and-promote:
-    needs: deploy-preview
+  production-approval:
+    needs: build-and-verify
     runs-on: ubuntu-latest
-    permissions:  
-      issues: write
-      checks: write
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create Release PR
+        id: create-pr
+        uses: repo-sync/pull-request@v2
+        with:
+          destination_branch: "main"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Manual Approval
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.token }}
           approvers: "aseemfaras"
+          issue-number: ${{ steps.create-pr.outputs.pr-number }}
 
-      - name: Promote to Production
-        run: |
-          curl -X POST \
-            "https://api.vercel.com/v13/deployments/${{ needs.deploy-preview.outputs.deployment_id }}/promote" \
-            -H "Authorization: Bearer $VERCEL_TOKEN_1" \
-            -H "Content-Type: application/json" \
-            -d '{"target": "production"}'
-        env:
-          VERCEL_TOKEN_1: ${{ secrets.VERCEL_TOKEN_1 }}
+      - name: Merge to Production
+        if: success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ steps.create-pr.outputs.pr-number }}
+            })
