@@ -27,9 +27,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
+      issues: write
       checks: write
-      statuses: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,33 +42,63 @@ jobs:
           source_branch: "dev"
           destination_branch: "main"
           github_token: ${{ secrets.PAT_TOKEN }}
-          pr_title: "Production Release: $(date +'%Y-%m-%d')"
+          pr_title: "Production Release: ${{ github.event.head_commit.timestamp }}"
           pr_body: "Automated production release from dev branch"
 
+      - name: Verify PR Status
+        id: check-pr
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}
+          script: |
+            try {
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: ${{ steps.create-pr.outputs.pr_number }}
+              });
+              
+              core.setOutput('pr_state', pr.state);
+              core.setOutput('merged', pr.merged);
+              console.log('PR Status:', { state: pr.state, merged: pr.merged });
+            } catch (error) {
+              core.setFailed(`Failed to check PR status: ${error.message}`);
+            }
+
       - name: Manual Approval
+        if: steps.check-pr.outputs.pr_state == 'open' && steps.check-pr.outputs.merged != 'true'
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ secrets.PAT_TOKEN }}
           approvers: aseemfaras
-          issue-number: ${{ steps.create-pr.outputs.pr-number }}
           minimum-approvals: 1
 
       - name: Merge to Production
-        if: success()
+        if: success() && steps.check-pr.outputs.pr_state == 'open'
         uses: actions/github-script@v6
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
+          github-token: ${{ secrets.PAT_TOKEN }}
           script: |
             try {
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: ${{ steps.create-pr.outputs.pr_number }}
+              });
+
+              if (pr.merged) {
+                console.log('PR already merged - skipping merge');
+                return;
+              }
+
               const response = await github.rest.pulls.merge({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: ${{ steps.create-pr.outputs.pr-number }},
+                pull_number: ${{ steps.create-pr.outputs.pr_number }},
                 merge_method: 'squash'
               });
-              console.log(`Merge successful: ${response.data.message}`);
+              
+              console.log('Merge successful:', response.data.message);
             } catch (error) {
               core.setFailed(`Merge failed: ${error.message}`);
             }
-              
