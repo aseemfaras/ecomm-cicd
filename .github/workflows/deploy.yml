@@ -33,6 +33,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      checks: write
+    env:
+      VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -53,7 +56,7 @@ jobs:
             This PR was automatically created and will be merged upon approval.
             Approving and merging this PR will trigger the production deployment.
 
-      - name: Wait for PR Review
+      - name: Wait for PR Review and Approval
         id: wait-for-review
         uses: actions/github-script@v6
         with:
@@ -61,73 +64,103 @@ jobs:
           script: |
             const maxAttempts = 30; // 5 minutes with 10-second intervals
             let attempts = 0;
-            
-            while (attempts < maxAttempts) {
+            let approved = false;
+            const prNumber = ${{ steps.create-pr.outputs.pr_number }};
+
+            while (attempts < maxAttempts && !approved) {
               try {
                 const { data: pr } = await github.rest.pulls.get({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  pull_number: ${{ steps.create-pr.outputs.pr_number }}
+                  pull_number: prNumber
                 });
-                
+
+                // Check PR state
+                if (pr.state !== 'open' || pr.merged) {
+                  console.log(`PR state: ${pr.state}, merged: ${pr.merged}`);
+                  core.setOutput('pr_closed', 'true');
+                  break;
+                }
+
+                // Check reviews
                 const { data: reviews } = await github.rest.pulls.listReviews({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  pull_number: ${{ steps.create-pr.outputs.pr_number }}
+                  pull_number: prNumber
                 });
-                
-                const approved = reviews.some(review => review.state === 'APPROVED');
-                
+
+                approved = reviews.some(review => 
+                  review.state === 'APPROVED' && review.state !== 'DISMISSED'
+                );
+
                 if (approved) {
                   console.log('PR approved - proceeding with merge');
                   core.setOutput('approved', 'true');
                   break;
                 }
-                
-                if (pr.state !== 'open') {
-                  console.log('PR is no longer open');
-                  core.setFailed('PR was closed without approval');
-                  break;
-                }
-                
-                console.log('Waiting for PR approval...');
-                await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+
+                console.log(`Waiting for approval (attempt ${attempts + 1}/${maxAttempts})`);
+                await new Promise(resolve => setTimeout(resolve, 10000));
                 attempts++;
               } catch (error) {
-                console.log(`Error checking PR status: ${error.message}`);
-                core.setFailed(error.message);
-                break;
+                console.error(`Error checking PR status: ${error.message}`);
+                if (error.status === 404) {
+                  core.setFailed(`PR #${prNumber} not found`);
+                  break;
+                }
+                if (attempts === maxAttempts - 1) {
+                  core.setFailed('Max retries reached without approval');
+                }
               }
             }
-            
-            if (attempts >= maxAttempts) {
-              core.setFailed('Timeout waiting for PR approval');
+
+            if (!approved) {
+              core.setFailed(attempts >= maxAttempts 
+                ? 'Approval timeout: No approval received within 5 minutes' 
+                : 'PR closed without approval');
             }
 
-      - name: Merge PR and Deploy
+      - name: Merge Approved PR
         if: success() && steps.wait-for-review.outputs.approved == 'true'
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
+            const prNumber = ${{ steps.create-pr.outputs.pr_number }};
             try {
+              // Verify PR status before merging
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+
+              if (pr.merged) {
+                console.log('PR already merged - skipping merge');
+                return;
+              }
+
               const response = await github.rest.pulls.merge({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: ${{ steps.create-pr.outputs.pr_number }},
+                pull_number: prNumber,
                 merge_method: 'squash'
               });
               
               console.log('Merge successful:', response.data.message);
-              
-              // Trigger Vercel deployment
-              const deployHookUrl = process.env.VERCEL_DEPLOY_HOOK_URL;
-              const fetch = require('node-fetch');
-              await fetch(deployHookUrl, { method: 'POST' });
-              console.log('Vercel deployment triggered');
+              core.setOutput('merge_status', 'success');
               
             } catch (error) {
-              core.setFailed(`Action failed: ${error.message}`);
+              core.setFailed(`Merge failed: ${error.message}`);
             }
-        env:
-          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+
+      - name: Trigger Vercel Deployment
+        if: success() && steps.merge-approved.outputs.merge_status == 'success'
+        run: |
+          if [ -n "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "Triggering Vercel deployment..."
+            curl -X POST "$VERCEL_DEPLOY_HOOK_URL"
+            echo "Deployment trigger sent successfully"
+          else
+            echo "Warning: VERCEL_DEPLOY_HOOK_URL not set"
+          fi
