@@ -1,97 +1,31 @@
-name: Deploy with Manual Approval
+name: Production Deployment
 
 on:
   push:
     branches:
-      - dev
-  pull_request_review:
-    types:
-      - submitted
+      - main
 
 jobs:
-  build-and-verify:
-    if: github.event_name == 'push'
+  request-approval:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Mock Install Dependencies
+      - name: Create Deployment Approval Request
         run: |
-          echo "Installing dependencies..."
-          echo "Dependencies installed successfully!"
+          echo "Approval required for production deployment!"
+          echo "PR merged: ${{ github.event.head_commit.message}}"
 
-      - name: Mock Build Project
-        run: |
-          echo "Building project..."
-          echo "Project built successfully!"
-
-      - name: Mock Tests
-        run: |
-          echo "Running tests..."
-          echo "All tests passed successfully!"
-
-  create-pr:
-    needs: build-and-verify
-    if: github.event_name == 'push'
+  deploy:
+    needs: request-approval
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      actions: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Wait for Approval
+        uses: trstringer/manual-approval@v1
         with:
-          ref: dev
+          secret: ${{ secrets.GITHUB_TOKEN }}
+          approvers: aseemfaras
+          minimum-approvals: 1
 
-      - name: Create Release PR
-        id: create-pr
-        uses: repo-sync/pull-request@v2
-        with:
-          source_branch: "dev"
-          destination_branch: "main"
-          github_token: ${{ secrets.PAT_TOKEN }}
-          pr_title: "Production Release: ${{ github.event.head_commit.timestamp }}"
-          pr_body: |
-            Automated production release from dev branch.
-            
-            This PR requires approval. Once approved and merged, it will trigger the production deployment via Vercel.
-
-  deploy-production:
-    if: |
-      github.event_name == 'pull_request_review' && 
-      github.event.review.state == 'approved' && 
-      github.event.pull_request.base.ref == 'main' && 
-      github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - name: Verify Deployment Conditions
-        run: |
-          echo "Verifying deployment conditions:"
-          echo "Review State: ${{ github.event.review.state }}"
-          echo "Base Branch: ${{ github.event.pull_request.base.ref }}"
-          echo "PR Merged: ${{ github.event.pull_request.merged }}"
-
-      - name: Trigger Vercel Deployment
-        if: success()
-        run: |
-          if [ -n "$VERCEL_DEPLOY_HOOK_URL" ]; then
-            echo "Triggering Vercel deployment..."
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$VERCEL_DEPLOY_HOOK_URL")
-            HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-            BODY=$(echo "$RESPONSE" | sed '$d')
-            
-            if [ "$HTTP_STATUS" -eq 200 ]; then
-              echo "Deployment triggered successfully"
-            else
-              echo "Failed to trigger deployment. Status: $HTTP_STATUS"
-              echo "Response: $BODY"
-              exit 1
-            fi
-          else
-            echo "Error: VERCEL_DEPLOY_HOOK_URL not set"
-            exit 1
-          fi
-        env:
-          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+      - name: Trigger Production Deployment
+        run: curl -X POST ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
