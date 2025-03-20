@@ -27,14 +27,12 @@ jobs:
           echo "Running tests..."
           echo "All tests passed successfully!"
 
-  production-approval:
+  create-and-merge-pr:
     needs: build-and-verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      issues: write
-      checks: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -49,56 +47,70 @@ jobs:
           destination_branch: "main"
           github_token: ${{ secrets.PAT_TOKEN }}
           pr_title: "Production Release: ${{ github.event.head_commit.timestamp }}"
-          pr_body: "Automated production release from dev branch"
+          pr_body: |
+            Automated production release from dev branch
+            
+            This PR was automatically created and will be merged upon approval.
+            Approving and merging this PR will trigger the production deployment.
 
-      - name: Verify PR Status
-        id: check-pr
+      - name: Wait for PR Review
+        id: wait-for-review
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
-            try {
-              const { data: pr } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: ${{ steps.create-pr.outputs.pr_number }}
-              });
-              
-              core.setOutput('pr_state', pr.state);
-              core.setOutput('merged', pr.merged);
-              console.log('PR Status:', { state: pr.state, merged: pr.merged });
-            } catch (error) {
-              core.setFailed(`Failed to check PR status: ${error.message}`);
+            const maxAttempts = 30; // 5 minutes with 10-second intervals
+            let attempts = 0;
+            
+            while (attempts < maxAttempts) {
+              try {
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: ${{ steps.create-pr.outputs.pr_number }}
+                });
+                
+                const { data: reviews } = await github.rest.pulls.listReviews({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: ${{ steps.create-pr.outputs.pr_number }}
+                });
+                
+                const approved = reviews.some(review => review.state === 'APPROVED');
+                
+                if (approved) {
+                  console.log('PR approved - proceeding with merge');
+                  core.setOutput('approved', 'true');
+                  break;
+                }
+                
+                if (pr.state !== 'open') {
+                  console.log('PR is no longer open');
+                  core.setFailed('PR was closed without approval');
+                  break;
+                }
+                
+                console.log('Waiting for PR approval...');
+                await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+                attempts++;
+              } catch (error) {
+                console.log(`Error checking PR status: ${error.message}`);
+                core.setFailed(error.message);
+                break;
+              }
+            }
+            
+            if (attempts >= maxAttempts) {
+              core.setFailed('Timeout waiting for PR approval');
             }
 
-      - name: Manual Approval
-        if: steps.check-pr.outputs.pr_state == 'open' && steps.check-pr.outputs.merged != 'true'
-        uses: trstringer/manual-approval@v1
-        with:
-          secret: ${{ secrets.PAT_TOKEN }}
-          approvers: aseemfaras
-          minimum-approvals: 1
-
-      - name: Merge to Production
-        id: merge-prod
-        if: success() && steps.check-pr.outputs.pr_state == 'open'
+      - name: Merge PR and Deploy
+        if: success() && steps.wait-for-review.outputs.approved == 'true'
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
             try {
-              const { data: pr } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: ${{ steps.create-pr.outputs.pr_number }}
-              });
-
-              if (pr.merged) {
-                console.log('PR already merged - skipping merge');
-                core.setOutput('merge_performed', 'false');
-                return;
-              }
-
               const response = await github.rest.pulls.merge({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -107,12 +119,15 @@ jobs:
               });
               
               console.log('Merge successful:', response.data.message);
-              core.setOutput('merge_performed', 'true');
+              
+              // Trigger Vercel deployment
+              const deployHookUrl = process.env.VERCEL_DEPLOY_HOOK_URL;
+              const fetch = require('node-fetch');
+              await fetch(deployHookUrl, { method: 'POST' });
+              console.log('Vercel deployment triggered');
+              
             } catch (error) {
-              core.setFailed(`Merge failed: ${error.message}`);
+              core.setFailed(`Action failed: ${error.message}`);
             }
-
-      - name: Trigger Vercel Deployment
-        if: steps.merge-prod.outputs.merge_performed == 'true'
-        run: |
-          curl -X POST ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
