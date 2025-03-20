@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - dev
+  pull_request_review:
+    types:
+      - submitted
 
 jobs:
   build-and-verify:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -27,15 +31,13 @@ jobs:
           echo "Running tests..."
           echo "All tests passed successfully!"
 
-  create-and-merge-pr:
+  create-pr:
     needs: build-and-verify
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      checks: write
-    env:
-      VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -51,116 +53,45 @@ jobs:
           github_token: ${{ secrets.PAT_TOKEN }}
           pr_title: "Production Release: ${{ github.event.head_commit.timestamp }}"
           pr_body: |
-            Automated production release from dev branch
+            Automated production release from dev branch.
             
-            This PR was automatically created and will be merged upon approval.
-            Approving and merging this PR will trigger the production deployment.
+            This PR requires approval. Once approved and merged, it will trigger the production deployment via Vercel.
 
-      - name: Wait for PR Review and Approval
-        id: wait-for-review
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            const maxAttempts = 30; // 5 minutes with 10-second intervals
-            let attempts = 0;
-            let approved = false;
-            const prNumber = ${{ steps.create-pr.outputs.pr_number }};
-
-            while (attempts < maxAttempts && !approved) {
-              try {
-                const { data: pr } = await github.rest.pulls.get({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: prNumber
-                });
-
-                // Check PR state
-                if (pr.state !== 'open' || pr.merged) {
-                  console.log(`PR state: ${pr.state}, merged: ${pr.merged}`);
-                  core.setOutput('pr_closed', 'true');
-                  break;
-                }
-
-                // Check reviews
-                const { data: reviews } = await github.rest.pulls.listReviews({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: prNumber
-                });
-
-                approved = reviews.some(review => 
-                  review.state === 'APPROVED' && review.state !== 'DISMISSED'
-                );
-
-                if (approved) {
-                  console.log('PR approved - proceeding with merge');
-                  core.setOutput('approved', 'true');
-                  break;
-                }
-
-                console.log(`Waiting for approval (attempt ${attempts + 1}/${maxAttempts})`);
-                await new Promise(resolve => setTimeout(resolve, 10000));
-                attempts++;
-              } catch (error) {
-                console.error(`Error checking PR status: ${error.message}`);
-                if (error.status === 404) {
-                  core.setFailed(`PR #${prNumber} not found`);
-                  break;
-                }
-                if (attempts === maxAttempts - 1) {
-                  core.setFailed('Max retries reached without approval');
-                }
-              }
-            }
-
-            if (!approved) {
-              core.setFailed(attempts >= maxAttempts 
-                ? 'Approval timeout: No approval received within 5 minutes' 
-                : 'PR closed without approval');
-            }
-
-      - name: Merge Approved PR
-        if: success() && steps.wait-for-review.outputs.approved == 'true'
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            const prNumber = ${{ steps.create-pr.outputs.pr_number }};
-            try {
-              // Verify PR status before merging
-              const { data: pr } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber
-              });
-
-              if (pr.merged) {
-                console.log('PR already merged - skipping merge');
-                return;
-              }
-
-              const response = await github.rest.pulls.merge({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber,
-                merge_method: 'squash'
-              });
-              
-              console.log('Merge successful:', response.data.message);
-              core.setOutput('merge_status', 'success');
-              
-            } catch (error) {
-              core.setFailed(`Merge failed: ${error.message}`);
-            }
+  deploy-production:
+    if: |
+      github.event_name == 'pull_request_review' && 
+      github.event.review.state == 'approved' && 
+      github.event.pull_request.base.ref == 'main' && 
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Verify Deployment Conditions
+        run: |
+          echo "Verifying deployment conditions:"
+          echo "Review State: ${{ github.event.review.state }}"
+          echo "Base Branch: ${{ github.event.pull_request.base.ref }}"
+          echo "PR Merged: ${{ github.event.pull_request.merged }}"
 
       - name: Trigger Vercel Deployment
-        if: success() && steps.merge-approved.outputs.merge_status == 'success'
+        if: success()
         run: |
           if [ -n "$VERCEL_DEPLOY_HOOK_URL" ]; then
             echo "Triggering Vercel deployment..."
-            curl -X POST "$VERCEL_DEPLOY_HOOK_URL"
-            echo "Deployment trigger sent successfully"
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$VERCEL_DEPLOY_HOOK_URL")
+            HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            
+            if [ "$HTTP_STATUS" -eq 200 ]; then
+              echo "Deployment triggered successfully"
+            else
+              echo "Failed to trigger deployment. Status: $HTTP_STATUS"
+              echo "Response: $BODY"
+              exit 1
+            fi
           else
-            echo "Warning: VERCEL_DEPLOY_HOOK_URL not set"
+            echo "Error: VERCEL_DEPLOY_HOOK_URL not set"
+            exit 1
           fi
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
