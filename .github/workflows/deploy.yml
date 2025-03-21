@@ -1,39 +1,61 @@
-name: Production Deployment
+name: PR-Based Production Deployment
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
-    branches:
-      - main
-    types: [closed]
+    branches: [main]
+    types: [opened, closed]
   issues:
     types: [opened]
 
 jobs:
-  deploy:
-    if: github.event.pull_request.merged == true || github.event_name == 'push'
+  approval-request:
+    name: Request PR Approval
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
+    if: github.event.action == 'opened' && github.event_name == 'pull_request'
     steps:
-      # Conditional approval only for direct pushes
-      - name: Wait for Deployment Approval
-        if: github.event_name == 'push'
-        uses: trstringer/manual-approval@v1
+      - name: Send PR Approval Request
+        uses: slackapi/slack-github-action@v1.23.0
         with:
-          secret: ${{ secrets.GITHUB_TOKEN }}
-          approvers: aseemkdigital
-          minimum-approvals: 1
-          timeout-minutes: 30
-          issue-title: "Deployment Approval Request for Direct Push"
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "⚠️ *New PR Requires Approval* ⚠️\n*Title:* ${{ github.event.pull_request.title }}\n*Author:* ${{ github.event.pull_request.user.login }}\n*Link:* <${{ github.event.pull_request.html_url }}|PR #${{ github.event.pull_request.number }}>"
+                  },
+                  "accessory": {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Approve PR",
+                      "emoji": true
+                    },
+                    "value": "approve_pr",
+                    "url": "${{ github.event.pull_request.html_url }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  deploy:
+    name: Deploy after Merge
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      deployments: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Trigger Vercel Deployment
         run: |
           if [ -n "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}" ]; then
-            echo "Triggering production deployment..."
+            echo "Triggering production deployment for merged PR..."
             curl -X POST "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}"
             echo "Deployment trigger sent successfully!"
           else
@@ -41,32 +63,26 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare Deployment Notification
-        id: prepare-deploy-msg
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            LINK="${{ github.event.pull_request.html_url }}"
-            TITLE="PR #${{ github.event.pull_request.number }}"
-            EVENT_TYPE="merged pull request"
-          else
-            LINK="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
-            TITLE="${GITHUB_SHA:0:7}"
-            EVENT_TYPE="direct push"
-          fi
-          MESSAGE="🚀 Deployment triggered by $EVENT_TYPE: <$LINK|$TITLE>"
-          echo "message=$MESSAGE" >> $GITHUB_OUTPUT
-
       - name: Send Deployment Notification
         uses: slackapi/slack-github-action@v1.23.0
         with:
           payload: |
             {
-              "text": "${{ steps.prepare-deploy-msg.outputs.message }}"
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚀 *Deployment Triggered* 🚀\nMerged PR: <${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>\nCommit: <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${GITHUB_SHA:0:7}>\nBy: ${{ github.event.pull_request.merged_by.login }}"
+                  }
+                }
+              ]
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   issue-notification:
+    name: Issue Notifier
     runs-on: ubuntu-latest
     if: github.event_name == 'issues' && github.event.action == 'opened'
     steps:
