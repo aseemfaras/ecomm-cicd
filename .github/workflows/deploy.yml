@@ -1,9 +1,8 @@
-name: Deploy to Vercel (Dev, Production & Notifications)
+name: Deploy to Vercel (Production & Notifications)
 
 on:
   push:
     branches:
-      - dev
       - main
   pull_request:
     branches:
@@ -13,108 +12,17 @@ on:
     types: [opened]
 
 jobs:
-  dev-deployment:
-    if: github.ref == 'refs/heads/dev'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send Approval Email
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "🚀 Approval Required: Deploy to Dev"
-          body: |
-            A new deployment to **Dev** requires approval.
-
-            **Details:**
-            - Repository: ${{ github.repository }}
-            - Branch: ${{ github.ref_name }}
-            - Commit: ${{ github.sha }}
-            - Triggered by: ${{ github.actor }}
-
-            **Approve or Reject Deployment**:
-            ✅ Approve: [Click Here](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            
-            ❌ Reject: No action needed.
-          to: "muralialakuntla3@gmail.com"
-          from: "GitHub Actions <${{ secrets.EMAIL_USERNAME }}>"
-
-      - name: Send Slack Notification
-        run: |
-          curl -X POST -H 'Content-type: application/json' --data '{
-            "text": "🚀 *Dev Deployment Approval Needed!*\n\n🔗 [Approve Here](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-          }' ${{ secrets.SLACK_WEBHOOK_URL }}
-
-      - name: Awaiting Approval
-        run: |
-          echo "Waiting for user approval..."
-          sleep 10  # Simulate waiting
-
-      - name: User Approval
-        run: echo "::notice title=Approval Needed::Please approve or reject the deployment in GitHub Actions."
-
-      - name: Deploy to Vercel (Dev)
-        run: |
-          RESPONSE=$(curl -X POST "https://api.vercel.com/v1/integrations/deploy/prj_Q38cYIcXXq1HUu6JYAX98J5ZQl7G/R8gDPXUAQi")
-          echo "Vercel Deployment Response: $RESPONSE"
-
-      - name: Notify Deployment Success (Dev)
-        if: success()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "✅ Deployment Successful - Dev"
-          body: |
-            The deployment to **Dev** was successful!
-
-            **Details:**
-            - Repository: ${{ github.repository }}
-            - Branch: ${{ github.ref_name }}
-            - Commit: ${{ github.sha }}
-            - Approved by: ${{ github.actor }}
-
-            View changes: [Commit Details](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
-          to: "muralialakuntla3@gmail.com"
-          from: "GitHub Actions <${{ secrets.EMAIL_USERNAME }}>"
-
   prod-deployment:
-    # Triggered when:
-    # - A push is made to main, or
-    # - A pull request targeting main is closed and merged.
-    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    # This job runs only when:
+    #   - A push is made to the main branch, OR
+    #   - A pull request on main is closed and merged.
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
     steps:
-      - name: Wait for Deployment Approval
-        uses: trstringer/manual-approval@v1
-        with:
-          secret: ${{ secrets.GITHUB_TOKEN }}
-          approvers: aseemkdigital
-          minimum-approvals: 1
-          timeout-minutes: 30 
-
-      - name: Send Slack Notification
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            LINK="${{ github.event.pull_request.html_url }}"
-            MESSAGE="🚀 *Production Deployment Approved!*\n\n🔗 [View Pull Request]($LINK)"
-          else
-            LINK="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
-            MESSAGE="🚀 *Production Deployment Approved!*\n\n🔗 [View Commit]($LINK)"
-          fi
-          curl -X POST -H 'Content-type: application/json' --data "{\"text\": \"$MESSAGE\"}" ${{ secrets.SLACK_WEBHOOK_URL }}
-
       - name: Trigger Vercel Deployment (Prod)
         run: |
           if [ -n "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}" ]; then
-            echo "Triggering production deployment..."
+            echo "Triggering production deployment via deploy hook..."
             curl -X POST "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}"
             echo "Deployment trigger sent successfully!"
           else
@@ -123,7 +31,6 @@ jobs:
           fi
 
   notify-event:
-    # This job sends a Slack notification when a new pull request or issue is created.
     if: github.event_name == 'issues' || (github.event_name == 'pull_request' && github.event.action == 'opened')
     runs-on: ubuntu-latest
     steps:
