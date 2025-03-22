@@ -57,7 +57,7 @@ jobs:
 
       - name: Deploy to Vercel (Dev)
         run: |
-          RESPONSE=$(curl -X POST "https://api.vercel.com/v1/integrations/deploy/prj_7XyM8LADa4eZv1xuwLAs6A2GguQz/y8woa74KJG")
+          RESPONSE=$(curl -X POST "https://api.vercel.com/v1/integrations/deploy/prj_Q38cYIcXXq1HUu6JYAX98J5ZQl7G/R8gDPXUAQi")
           echo "Vercel Deployment Response: $RESPONSE"
 
       - name: Notify Deployment Success (Dev)
