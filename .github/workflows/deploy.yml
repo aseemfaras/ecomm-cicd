@@ -1,30 +1,21 @@
-name: Production Deployment
+name: PR-Based Production Deployment
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
     types: [closed]
+  issues:
+    types: [opened]
 
 jobs:
-  notify-slack:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send Slack Notification
-        run: |
-          curl -X POST -H 'Content-type: application/json' --data '{
-            "text": "A new deployment to Ecomm Prod is pending approval. Approve in GitHub Actions: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          }' ${{ secrets.SLACK_WEBHOOK_URL }}
-
   deploy:
-    if: github.event.pull_request.merged == true || github.event_name == 'push'
+    name: Deploy after Merge
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    environment: production
     permissions:
-      issues: write
-      pull-requests: write
+      deployments: write
     steps:
       - name: Wait for Deployment Approval
         uses: trstringer/manual-approval@v1
@@ -32,19 +23,45 @@ jobs:
           secret: ${{ secrets.GITHUB_TOKEN }}
           approvers: aseemkdigital
           minimum-approvals: 1
-          timeout-minutes: 30 
+          timeout-minutes: 30
 
       - name: Trigger Vercel Deployment
         run: |
           if [ -n "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}" ]; then
-            echo "Triggering production deployment..."
+            echo "Triggering production deployment for merged PR..."
             curl -X POST "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}"
             echo "Deployment trigger sent successfully!"
           else
             echo "Error: VERCEL_DEPLOY_HOOK_URL secret not configured"
             exit 1
           fi
-  deployment-status:
+
+      - name: Prepare Deployment Notification
+        id: prepare-deploy-msg
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            LINK="${{ github.event.pull_request.html_url }}"
+            TITLE="PR #${{ github.event.pull_request.number }}"
+            EVENT_TYPE="merged pull request"
+          else
+            LINK="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+            TITLE="${GITHUB_SHA:0:7}"
+            EVENT_TYPE="direct push"
+          fi
+          MESSAGE="🚀 Deployment triggered by $EVENT_TYPE: <$LINK|$TITLE>"
+          echo "message=$MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: Send Deployment Notification
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "${{ steps.prepare-deploy-msg.outputs.message }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  issue-notification:
     runs-on: ubuntu-latest
     steps:
       - name: Send Slack Notification
